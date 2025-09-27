@@ -395,7 +395,8 @@ class SaveTiff:
     def INPUT_TYPES(s):
         return {"required": 
                     {"images": ("IMAGE", ),
-                     "filename_prefix": ("STRING", {"default": "ComfyUI"})},
+                     "filename_prefix": ("STRING", {"default": "ComfyUI"}),
+                     "local_save": ("BOOLEAN", {"default": False})},
                 "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
                 }
 
@@ -406,7 +407,7 @@ class SaveTiff:
 
     CATEGORY = "HQ-Image-Save"
 
-    def save_images(self, images, filename_prefix="ComfyUI", prompt=None, extra_pnginfo=None):
+    def save_images(self, images, filename_prefix="ComfyUI", local_save=False, prompt=None, extra_pnginfo=None):
         import imageio
         
         filename_prefix += self.prefix_append
@@ -423,6 +424,17 @@ class SaveTiff:
             #    "type": self.type
             #})
             counter += 1
+
+        if local_save:
+            import io
+            buffer = io.BytesIO()
+            for image in images:
+                i = 65535. * image.cpu().numpy()
+                img = np.clip(i, 0, 65535).astype(np.uint16)
+                imageio.imwrite(buffer, img, format='tiff')
+            tiff_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            file = {"filename": f"{filename_prefix}.tiff", "subfolder": "", "type": self.type, "data": tiff_base64, "format": "tiff"}
+            PromptServer.instance.send_sync("local_save_data", {"images": [file]})
 
         return { "ui": { "images": results } }
 
