@@ -4,16 +4,19 @@ from glob import glob
 from tqdm import tqdm, trange
 import json
 
-os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
-
-import cv2 as cv
-import torch
 import numpy as np
+import torch
+import folder_paths
+import hashlib
+import cv2 as cv
+import base64
+from server import PromptServer
 
 import folder_paths
 from comfy.cli_args import args
 from comfy.utils import PROGRESS_BAR_ENABLED, ProgressBar
 
+os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 
 def sRGBtoLinear(npArray):
     less = npArray <= 0.0404482362771082
@@ -64,6 +67,24 @@ def write_workflow(exr_path, prompt=None, extra_pnginfo=None):
         with open(jsonpath + "_ui.json", "w") as f:
             for x in extra_pnginfo:
                 f.write(json.dumps(extra_pnginfo[x], indent=2))
+
+def convert_to_exr_and_base64(image_np, tonemap):
+    linear = image_np.astype(np.float32)
+    if tonemap != "linear":
+        sRGBtoLinear(linear[..., :3])
+    if tonemap == "Reinhard":
+        linear[..., :3] = np.clip(linear[..., :3], 0, 0.999999)
+        linear[..., :3] = -linear[..., :3] / (linear[..., :3] - 1)
+
+    bgr = linear.copy()
+    bgr[:, :, :, 0] = linear[:, :, :, 2]
+    bgr[:, :, :, 2] = linear[:, :, :, 0]
+    if bgr.shape[-1] > 3:
+        bgr[:, :, :, 3] = np.clip(1 - linear[:, :, :, 3], 0, 1) 
+
+    _, buffer = cv.imencode('.exr', bgr[0, :, :, :].squeeze())
+    exr_base64 = base64.b64encode(buffer).decode('utf-8')
+    return exr_base64
 
 class LoadEXR:
     @classmethod
@@ -195,6 +216,7 @@ class SaveEXR:
                 "start_frame": ("INT", {"default": 1001, "min": 0, "max": 99999999}),
                 "frame_pad": ("INT", {"default": 4, "min": 1, "max": 8}),
                 "save_workflow": (["ui", "api", "ui + api", "none"],),
+                "local_save": ("BOOLEAN", {"default": False}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -209,7 +231,7 @@ class SaveEXR:
 
     CATEGORY = "HQ-Image-Save"
 
-    def save_images(self, images, filename_prefix, tonemap, version, start_frame, frame_pad, save_workflow, prompt=None, extra_pnginfo=None):
+    def save_images(self, images, filename_prefix, tonemap, version, start_frame, frame_pad, save_workflow, local_save, prompt=None, extra_pnginfo=None):
         useabs = os.path.isabs(filename_prefix)
         if not useabs:
             full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(filename_prefix, self.output_dir, images[0].shape[1], images[0].shape[0])
@@ -265,6 +287,11 @@ class SaveEXR:
             
             if pbar is not None:
                 pbar.update(1)
+
+        if local_save:
+            exr_base64 = convert_to_exr_and_base64(images.cpu().numpy(), tonemap)
+            file = {"filename": f"{filename_prefix}.exr", "subfolder": "", "type": self.type, "data": exr_base64, "format": "exr"}
+            PromptServer.instance.send_sync("local_save_data", {"images": [file]})
 
         return { "ui": { "images": results } }
 
