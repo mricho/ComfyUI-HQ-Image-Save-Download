@@ -4,17 +4,38 @@ import { api } from "../../../scripts/api.js";
 app.registerExtension({
     name: "Comfy.LocalSave",
     async setup() {
-        // Base64をBlobに変換するユーティリティ関数
+        // Helper to download file via HTTP (works for any file size)
+        async function downloadViaHttp(filename, subfolder, type, format) {
+            const params = new URLSearchParams({
+                filename: filename,
+                subfolder: subfolder || "",
+                type: type || "output"
+            });
+
+            const response = await fetch(`/view?${params.toString()}`);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const blob = await response.blob();
+            const downloadLink = document.createElement("a");
+            downloadLink.href = URL.createObjectURL(blob);
+            downloadLink.download = filename;
+
+            document.body.appendChild(downloadLink);
+            downloadLink.click();
+            document.body.removeChild(downloadLink);
+            URL.revokeObjectURL(downloadLink.href);
+        }
+
+        // Legacy: Base64をBlobに変換するユーティリティ関数 (kept for backward compatibility with small files)
         function base64ToBlob(base64, mimeType) {
-            // Base64文字列をバイナリデータに変換
             const byteString = atob(base64);
-            // バイナリデータをUint8Arrayに変換
             const ab = new ArrayBuffer(byteString.length);
             const ia = new Uint8Array(ab);
             for (let i = 0; i < byteString.length; i++) {
                 ia[i] = byteString.charCodeAt(i);
             }
-            // Blobを作成して返す
             return new Blob([ab], { type: mimeType });
         }
 
@@ -22,27 +43,28 @@ app.registerExtension({
         api.addEventListener("local_save_data", async ({ detail }) => {
             try {
                 const { images } = detail;
-                
+
                 for (const imageData of images) {
-                    const { filename, data, format } = imageData;
-                    
-                    // Base64データを直接Blobに変換
-                    const blob = base64ToBlob(data, `image/${format}`);
-                    
-                    // ダウンロードリンクを作成
-                    const downloadLink = document.createElement("a");
-                    downloadLink.href = URL.createObjectURL(blob);
-                    downloadLink.download = filename;
-                    
-                    // ダウンロードを実行
-                    document.body.appendChild(downloadLink);
-                    downloadLink.click();
-                    document.body.removeChild(downloadLink);
-                    URL.revokeObjectURL(downloadLink.href);
+                    const { filename, subfolder, type, data, format } = imageData;
+
+                    // Use HTTP download if no base64 data provided (for large files)
+                    if (!data) {
+                        await downloadViaHttp(filename, subfolder, type, format);
+                    } else {
+                        // Legacy: Base64 decode for backward compatibility
+                        const blob = base64ToBlob(data, `image/${format}`);
+                        const downloadLink = document.createElement("a");
+                        downloadLink.href = URL.createObjectURL(blob);
+                        downloadLink.download = filename;
+
+                        document.body.appendChild(downloadLink);
+                        downloadLink.click();
+                        document.body.removeChild(downloadLink);
+                        URL.revokeObjectURL(downloadLink.href);
+                    }
                 }
-                
+
             } catch (error) {
-                // エラーメッセージを表示
                 app.ui.dialog.show("Save Error", `Error downloading images: ${error.message}`);
             }
         });

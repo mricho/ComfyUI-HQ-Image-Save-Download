@@ -271,14 +271,24 @@ class SaveEXR:
         for i in trange(batch_size, desc="saving images"):
             if useabs:
                 writepath = basepath + ver + f".{str(start_frame + i).zfill(frame_pad)}.exr"
+                saved_file = os.path.basename(writepath)
+                saved_subfolder = ""
             else:
-                file = f"{filename}_{counter:05}_.exr"
-                writepath = os.path.join(full_output_folder, file)
+                saved_file = f"{filename}_{counter:05}_.exr"
+                writepath = os.path.join(full_output_folder, saved_file)
+                saved_subfolder = subfolder
                 counter += 1
             
             if os.path.exists(writepath):
                 raise Exception("File exists already, stopping to avoid overwriting")
             cv.imwrite(writepath, bgr[i])
+            
+            # Track saved file for local_save download
+            results.append({
+                "filename": saved_file,
+                "subfolder": saved_subfolder,
+                "type": self.type
+            })
             
             if i < 1 and save_workflow != "none":
                 api_json = prompt if "api" in save_workflow else None
@@ -289,9 +299,11 @@ class SaveEXR:
                 pbar.update(1)
 
         if local_save:
-            exr_base64 = convert_to_exr_and_base64(images.cpu().numpy(), tonemap)
-            file = {"filename": f"{filename_prefix}.exr", "subfolder": "", "type": self.type, "data": exr_base64, "format": "exr"}
-            PromptServer.instance.send_sync("local_save_data", {"images": [file]})
+            # Send file path for HTTP download instead of base64 (works for any file size)
+            # The file was already saved above, so we just tell the browser where to fetch it
+            for result in results:
+                file_info = {"filename": result["filename"], "subfolder": result["subfolder"], "type": result["type"], "format": "exr"}
+                PromptServer.instance.send_sync("local_save_data", {"images": [file_info]})
 
         return { "ui": { "images": results } }
 
@@ -418,23 +430,20 @@ class SaveTiff:
             img = np.clip(i, 0, 65535).astype(np.uint16)
             file = f"{filename}_{counter:05}_.tiff"
             imageio.imwrite(os.path.join(full_output_folder, file), img)
-            #results.append({
-            #    "filename": file,
-            #    "subfolder": subfolder,
-            #    "type": self.type
-            #})
+            # Track saved file for local_save download
+            results.append({
+                "filename": file,
+                "subfolder": subfolder,
+                "type": self.type
+            })
             counter += 1
 
         if local_save:
-            import io
-            buffer = io.BytesIO()
-            for image in images:
-                i = 65535. * image.cpu().numpy()
-                img = np.clip(i, 0, 65535).astype(np.uint16)
-                imageio.imwrite(buffer, img, format='tiff')
-            tiff_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-            file = {"filename": f"{filename_prefix}.tiff", "subfolder": "", "type": self.type, "data": tiff_base64, "format": "tiff"}
-            PromptServer.instance.send_sync("local_save_data", {"images": [file]})
+            # Send file path for HTTP download instead of base64 (works for any file size)
+            # The file was already saved above, so we just tell the browser where to fetch it
+            for result in results:
+                file_info = {"filename": result["filename"], "subfolder": result["subfolder"], "type": result["type"], "format": "tiff"}
+                PromptServer.instance.send_sync("local_save_data", {"images": [file_info]})
 
         return { "ui": { "images": results } }
 
