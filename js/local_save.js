@@ -4,29 +4,48 @@ import { api } from "../../../scripts/api.js";
 app.registerExtension({
     name: "Comfy.LocalSave",
     async setup() {
-        // Helper to download file via direct link (works for any file size and with reverse proxies)
-        function downloadViaHttp(filename, subfolder, type, format) {
+        // Helper to download file via HTTP fetch (works for any file size and with reverse proxies)
+        async function downloadViaHttp(filename, subfolder, type, format) {
             const params = new URLSearchParams({
                 filename: filename,
                 subfolder: subfolder || "",
                 type: type || "output"
             });
 
-            // Create a direct download link - don't use fetch, let browser handle it natively
-            const downloadUrl = `/view?${params.toString()}`;
-            const downloadLink = document.createElement("a");
-            downloadLink.href = downloadUrl;
-            downloadLink.download = filename;
-            downloadLink.style.display = "none";
+            // Use api.apiURL to get the correct base path for the current environment
+            const downloadUrl = api.apiURL(`/view?filename=${encodeURIComponent(filename)}&subfolder=${encodeURIComponent(subfolder || "")}&type=${encodeURIComponent(type || "output")}`);
+            console.log(`[LocalSave] Fetching from: ${downloadUrl}`);
 
-            document.body.appendChild(downloadLink);
-            downloadLink.click();
-            document.body.removeChild(downloadLink);
+            try {
+                const response = await fetch(downloadUrl);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
 
-            console.log(`[LocalSave] Triggered download for: ${filename}`);
+                const blob = await response.blob();
+                console.log(`[LocalSave] Received blob: ${blob.size} bytes, type: ${blob.type}`);
+
+                const blobUrl = URL.createObjectURL(blob);
+                const downloadLink = document.createElement("a");
+                downloadLink.href = blobUrl;
+                downloadLink.download = filename;
+                downloadLink.style.display = "none";
+
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+
+                // Clean up the blob URL after a delay
+                setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+
+                console.log(`[LocalSave] Download triggered for: ${filename}`);
+            } catch (fetchError) {
+                console.error(`[LocalSave] Fetch failed:`, fetchError);
+                throw fetchError;
+            }
         }
 
-        // Legacy: Base64をBlobに変換するユーティリティ関数 (kept for backward compatibility with small files)
+        // Legacy: Base64 to Blob conversion (kept for backward compatibility with small files)
         function base64ToBlob(base64, mimeType) {
             const byteString = atob(base64);
             const ab = new ArrayBuffer(byteString.length);
@@ -37,7 +56,7 @@ app.registerExtension({
             return new Blob([ab], { type: mimeType });
         }
 
-        // 画像データ受信時のハンドラー
+        // Handler for image data events
         api.addEventListener("local_save_data", async ({ detail }) => {
             console.log("[LocalSave] Received local_save_data event:", detail);
             try {
@@ -51,7 +70,7 @@ app.registerExtension({
                     // Use HTTP download if no base64 data provided (for large files)
                     if (!data) {
                         console.log("[LocalSave] Using HTTP download for:", filename);
-                        downloadViaHttp(filename, subfolder, type, format);
+                        await downloadViaHttp(filename, subfolder, type, format);
                     } else {
                         // Legacy: Base64 decode for backward compatibility
                         console.log("[LocalSave] Using base64 decode for:", filename);
@@ -73,7 +92,7 @@ app.registerExtension({
             }
         });
 
-        // エラーメッセージのハンドラー
+        // Error message handler
         api.addEventListener("local_save_error", ({ detail }) => {
             app.ui.dialog.show("Save Error", detail.message);
         });
